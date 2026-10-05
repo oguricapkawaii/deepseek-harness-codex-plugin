@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "deepseek": {
+      "command": "python",
+      "cwd": ".",
+      "args": ["scripts/launch.py"],
+      "enabled": true,
+      "default_tools_approval_mode": "prompt",
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 3660,
+      "env_vars": [
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "DEEPSEEK_MODEL",
+        "DEEPSEEK_TIMEOUT_SECONDS",
+        "DEEPSEEK_MAX_TOKENS",
+        "DEEPSEEK_HARNESS_HOME",
+        "DEEPSEEK_HARNESS_DATA_HOME",
+        "DEEPSEEK_HARNESS_NODE",
+        "DEEPSEEK_HARNESS_CLI",
+        "DEEPSEEK_HARNESS_ALLOWED_ROOTS"
+      ]
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "deepseek-coding-agent",
+  "version": "0.4.0",
+  "description": "Delegate approved repository work to an isolated DeepSeek Harness and inspect its history.",
+  "author": {
+    "name": "oguricapkawaii"
+  },
+  "license": "MIT",
+  "keywords": ["deepseek", "coding", "review", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DeepSeek Coding Agent",
+    "shortDescription": "Run bounded coding tasks through DeepSeek Harness",
+    "longDescription": "A local automation bridge: Codex defines and reviews the task while an isolated DeepSeek Harness reads, edits, and tests inside one explicitly selected workspace. Choose a DeepSeek model per run and inspect the separate GPT-side history.",
+    "developerName": "oguricapkawaii",
+    "category": "Developer Tools",
+    "capabilities": ["Workspace automation", "Per-task model and reasoning selection", "Isolated history", "Code review", "Test execution"],
+    "defaultPrompt": [
+      "Use DeepSeek Harness to implement this task in the current repository, then review the result.",
+      "Ask DeepSeek to review this code for correctness, security, and missing tests."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

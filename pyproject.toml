@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepseek-coding-agent"
+version = "0.4.0"
+description = "DeepSeek Harness automation and review tools for supervised coding workflows"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=2.0.0,<3.0.0",
+  "openai>=2.0.0,<3.0.0",
+]
+
+[project.scripts]
+deepseek-coding-agent = "deepseek_coding_agent.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

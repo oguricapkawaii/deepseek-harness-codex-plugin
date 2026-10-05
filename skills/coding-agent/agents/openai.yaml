@@ -1,0 +1,4 @@
+interface:
+  display_name: "DeepSeek Harness Agent"
+  short_description: "Automate repository work with DeepSeek Harness"
+  default_prompt: "Use $coding-agent to run this approved coding task through DeepSeek Harness and review the result."
