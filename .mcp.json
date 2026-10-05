@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "deepseek": {
-      "command": "python",
+      "command": "python3",
       "cwd": ".",
       "args": ["scripts/launch.py"],
       "enabled": true,

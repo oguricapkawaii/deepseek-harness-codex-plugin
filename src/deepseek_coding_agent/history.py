@@ -20,14 +20,14 @@ async def _run_helper(*args: str) -> dict[str, Any]:
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     def invoke() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [
-                str(layout.node),
+            layout.node_command(
                 str(helper),
                 *args,
                 str(layout.data_home),
                 str(layout.install_home),
-            ],
+            ),
             cwd=plugin_root,
+            env=layout.runtime_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

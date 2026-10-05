@@ -1,40 +1,124 @@
-# DeepSeek Harness Codex Plugin (Windows v0.4.0)
+# DeepSeek Harness Codex Plugin
 
-A local Codex plugin that connects Codex to an isolated DeepSeek Harness instance:
+An unofficial local Codex plugin that delegates bounded coding tasks to an
+isolated [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+runtime, then lets Codex inspect the result and conversation history.
 
-`requirements -> Harness reads/edits/tests -> Codex reviews the diff -> optional focused repair`
+The workflow is:
 
-The bundled MCP server exposes `harness_run` for one-shot repository automation plus the existing text-only `deepseek_ask`, `deepseek_code`, `deepseek_review`, and `deepseek_fix` tools. `harness_run` launches the E-drive DeepSeek Harness headless profile in the selected workspace with `workspace-write` sandboxing and telemetry disabled. It uses a separate data home, supports per-task model selection, and never writes the desktop app's session archive.
+`requirements -> Harness reads/edits/tests -> Codex reviews -> optional repair`
 
-Available Harness models are `deepseek-v4-flash` (default), `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp`. Each run also accepts `reasoning_effort`: `off`, `low`, `high`, or `max`; the plugin defaults to `max`. Use `harness_history_list` to find GPT-side sessions and `harness_history_export` to render one as Markdown without opening the desktop app against that data directory.
+The current `main` branch supports macOS and Windows. The original Windows-only
+implementation is preserved in the `v0.4.0-windows` tag.
 
-## Setup on Windows
+## Features
 
-1. In this directory, run `python scripts/setup.py`.
-2. Ensure DeepSeek Harness is installed at `E:\DeepSeekHarness-win32-x64-0.1.1-rc.1` and the isolated GPT data home exists at `E:\DeepSeekHarness-GPT` with `profiles\headless`.
-3. The isolated data home's Harness-managed credential store is used by `harness_run`; no key is copied into this plugin. Set `DEEPSEEK_API_KEY` only if you also want the direct text-only tools.
-4. Optional settings:
-   - `DEEPSEEK_MODEL` defaults to `deepseek-flash`.
-   - `DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com` and must use HTTPS.
-   - `DEEPSEEK_TIMEOUT_SECONDS` defaults to `180`.
-   - `DEEPSEEK_MAX_TOKENS` defaults to `8192`.
-   - `DEEPSEEK_HARNESS_HOME` overrides the read-only Harness installation/runtime directory.
-   - `DEEPSEEK_HARNESS_DATA_HOME` overrides the isolated GPT-side settings, profiles, and session directory.
-   - `DEEPSEEK_HARNESS_NODE` and `DEEPSEEK_HARNESS_CLI` override the bundled runtime paths.
-   - `DEEPSEEK_HARNESS_ALLOWED_ROOTS` is an optional semicolon-separated Windows allowlist for target workspaces.
-5. Register or install this folder as a local Codex plugin, then start a new chat so tools and skills reload.
+- Runs Harness inside one explicitly selected workspace with `workspace-write`.
+- Keeps GPT/Codex sessions in a data directory separate from the desktop app.
+- Selects a model per task: `deepseek-v4-flash`, `deepseek-v4-pro`, or
+  `deepseek-v4-flash-vision-exp`.
+- Selects reasoning effort per task: `off`, `low`, `high`, or `max` (default).
+- Lists and exports the isolated Harness history without opening that data
+  directory in the desktop app.
+- Includes direct text-only ask, code, review, and fix tools for users who also
+  provide `DEEPSEEK_API_KEY`.
 
-Never put the API key in `.mcp.json`, source code, or a committed `.env` file.
+MCP tools: `harness_run`, `harness_history_list`, `harness_history_export`,
+`deepseek_ask`, `deepseek_code`, `deepseek_review`, and `deepseek_fix`.
 
-Do not configure the desktop Harness app to use `E:\DeepSeekHarness-GPT` while an MCP task is running. The desktop app should keep using its original installation/data directory.
+## Requirements
 
-## Local checks
+- Python 3.10 or newer.
+- A local DeepSeek Harness installation.
+- A dedicated Harness data directory with an authenticated `headless` profile.
 
-Run:
+Defaults:
 
-```powershell
-python -m unittest discover -s tests -v
-python -m compileall -q src scripts tests
+| Platform | Harness application | Isolated GPT/Codex data |
+| --- | --- | --- |
+| macOS | `/Applications/DeepSeek Harness.app` | `~/Documents/DeepSeekHarness-GPT` |
+| Windows | `E:\DeepSeekHarness-win32-x64-0.1.1-rc.1` | `E:\DeepSeekHarness-GPT` |
+
+Any default can be overridden with the environment variables described below.
+
+## Install
+
+Clone the repository, enter it, and create the plugin-local virtual environment:
+
+```sh
+python3 scripts/setup.py
 ```
 
-The test suite and headless `--help` smoke test do not make a DeepSeek model request, so they spend no model credits and transmit no project data.
+On Windows, `python scripts/setup.py` is usually the equivalent command.
+
+Register the folder as a local Codex plugin, or add the MCP server manually.
+The bundled `.mcp.json` uses `python3` for macOS. On Windows, use the
+`v0.4.0-windows` tag or change that command to `python`. For a user-level Codex
+MCP entry, copy `codex-mcp.toml.example`, replace every `<PLUGIN_ROOT>` with this
+repository's absolute path, and use the platform-appropriate virtual-environment
+Python path.
+
+Start a new Codex chat after changing plugin or MCP configuration so the tools
+and skill reload.
+
+Example request:
+
+> Use DeepSeek Harness with deepseek-v4-pro and max reasoning in
+> /absolute/project/path to implement the task, then review its changes.
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `DEEPSEEK_HARNESS_HOME` | Harness application/install directory |
+| `DEEPSEEK_HARNESS_DATA_HOME` | Dedicated GPT/Codex settings, profiles, and sessions |
+| `DEEPSEEK_HARNESS_NODE` | Override the bundled Node executable |
+| `DEEPSEEK_HARNESS_CLI` | Override the Harness CLI entry point |
+| `DEEPSEEK_HARNESS_ALLOWED_ROOTS` | Optional target-workspace allowlist (`:` on macOS, `;` on Windows) |
+| `DEEPSEEK_API_KEY` | Optional; only needed by the four direct text tools |
+| `DEEPSEEK_BASE_URL` | Direct text API base URL; HTTPS required |
+| `DEEPSEEK_MODEL` | Default model for direct text tools |
+| `DEEPSEEK_TIMEOUT_SECONDS` | Direct text API timeout |
+| `DEEPSEEK_MAX_TOKENS` | Direct text API output-token limit |
+
+The Harness automation tools use Harness's own credential store. They do not
+copy a key into this repository.
+
+## History and isolation
+
+Keep the desktop Harness app on its normal data directory. Do not point it at
+`DEEPSEEK_HARNESS_DATA_HOME` while an MCP task is running; two processes opening
+the same session store can interrupt a run or damage transient state.
+
+Use `harness_history_list` to find Codex-side Harness sessions and
+`harness_history_export` to export one as Markdown. The history remains available
+even when the desktop app uses a different data directory.
+
+## Safety
+
+The bridge refuses to use a filesystem/drive root, the user home directory, the
+Harness installation, the isolated data directory, or the plugin itself as a
+task workspace. Its task prompt also forbids commits, pushes, history rewrites,
+broad deletion, and credential access.
+
+Never commit an API key, `.env`, Harness credential store, session directory, or
+the isolated data directory. Review the selected workspace and the generated
+diff before accepting model changes.
+
+## Checks
+
+```sh
+.venv/bin/python scripts/doctor.py
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+On Windows, use `.venv\Scripts\python.exe` instead. The doctor and unit tests do
+not call a model. macOS support, the seven-tool MCP handshake, history export,
+and one `deepseek-v4-flash`/`max` connectivity request were verified on the
+original development machine. Windows v0.5.0 compatibility is retained in code
+but has not been re-tested on that machine.
+
+## License
+
+[MIT](LICENSE). This project is not affiliated with or endorsed by DeepSeek or
+OpenAI.

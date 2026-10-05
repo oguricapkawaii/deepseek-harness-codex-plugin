@@ -6,9 +6,14 @@ import { zstdDecompressSync } from "node:zlib";
 const [mode, value, optional, dataHome, installHome] = process.argv.slice(2);
 const sessionRoot = join(dataHome, "sessions");
 const sessionModule = join(
-  installHome, "resources", "runtime", "node_modules", "@deepseek-ai", "dsh-session", "lib", "index.js",
+  installHome, ...(installHome.endsWith(".app")
+    ? ["Contents", "Resources", "app.asar", "dsh"] : ["resources", "runtime"]), "node_modules", "@deepseek-ai", "dsh-session", "lib", "index.js",
 );
-const { decodeStorageRecord } = await import(pathToFileURL(sessionModule).href);
+const sessionApi = await import(pathToFileURL(sessionModule).href);
+const decodeStorageRecord = sessionApi.decodeStorageRecord ?? ((row) => {
+  if (typeof row?.type === "string" && row.type !== "session") return [row];
+  throw new Error("Unsupported Harness history record format");
+});
 const ZSTD_MAGIC = 0xfd2fb528;
 
 function scanFrames(buffer) {
@@ -150,14 +155,15 @@ function exportMarkdown(session, maxChars) {
   return markdown.length <= maxChars ? markdown : `${markdown.slice(0, maxChars)}\n\n...[history export clipped]...`;
 }
 
+const normalizeWorkspace = (value) => process.platform === "win32" ? resolve(value).toLowerCase() : resolve(value);
 const logs = await findLogs();
 if (mode === "list") {
   const limit = Number.parseInt(value, 10);
-  const workspace = optional ? resolve(optional).toLowerCase() : "";
+  const workspace = optional ? normalizeWorkspace(optional) : "";
   const items = [];
   for (const log of logs.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs)) {
     const session = await readSession(log.path);
-    if (workspace && resolve(session.header.cwd ?? "").toLowerCase() !== workspace) continue;
+    if (workspace && normalizeWorkspace(session.header.cwd ?? "") !== workspace) continue;
     items.push(metadata(session, log.info));
     if (items.length >= limit) break;
   }

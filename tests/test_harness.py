@@ -79,13 +79,8 @@ class HarnessTests(unittest.TestCase):
         data_home.mkdir(exist_ok=True)
         settings_path = data_home / "settings.yaml"
         settings_path.write_text("ui-conversation:\n  busyEnter: steer\n", encoding="utf-8")
-        install_home = DEFAULT_HARNESS_HOME.resolve()
-        layout = HarnessLayout(
-            install_home,
-            data_home,
-            install_home / "resources" / "runtime" / "node.exe",
-            install_home / "resources" / "runtime" / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js",
-        )
+        detected = HarnessLayout.from_env()
+        layout = HarnessLayout(detected.install_home, data_home, detected.node, detected.cli)
         try:
             with model_override(layout, "deepseek-v4-pro", "max") as (model, effort, patch_path):
                 self.assertEqual(model, "deepseek-v4-pro")

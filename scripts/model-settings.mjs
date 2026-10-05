@@ -3,7 +3,9 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 
 const [source, destination, model, reasoningEffort, installHome] = process.argv.slice(2);
-const require = createRequire(join(installHome, "resources", "runtime", "package.json"));
+const require = createRequire(join(installHome, ...(installHome.endsWith(".app")
+  ? ["Contents", "Resources", "app.asar", "dsh", "package.json"]
+  : ["resources", "runtime", "package.json"])));
 const { parse } = require("yaml");
 
 let settings = {};

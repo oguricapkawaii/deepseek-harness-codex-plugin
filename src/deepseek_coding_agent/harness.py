@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -13,8 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
-DEFAULT_HARNESS_HOME = Path(r"E:\DeepSeekHarness-win32-x64-0.1.1-rc.1")
-DEFAULT_HARNESS_DATA_HOME = Path(r"E:\DeepSeekHarness-GPT")
+DEFAULT_HARNESS_HOME = (Path("/Applications/DeepSeek Harness.app") if sys.platform == "darwin"
+                        else Path(r"E:\DeepSeekHarness-win32-x64-0.1.1-rc.1"))
+DEFAULT_HARNESS_DATA_HOME = (Path.home() / "Documents" / "DeepSeekHarness-GPT" if sys.platform == "darwin"
+                             else Path(r"E:\DeepSeekHarness-GPT"))
 HARNESS_MODELS = (
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -48,28 +51,43 @@ class HarnessLayout:
         data_home = Path(
             os.environ.get("DEEPSEEK_HARNESS_DATA_HOME", str(DEFAULT_HARNESS_DATA_HOME))
         ).expanduser().resolve()
+        mac_bundle = install_home.suffix.lower() == ".app"
+        default_node = (install_home / "Contents" / "MacOS" / "DeepSeek Harness" if mac_bundle
+                        else install_home / "resources" / "runtime" / "node.exe")
+        default_cli = (install_home / "Contents" / "Resources" / "app.asar" / "dsh" / "node_modules"
+                       / "@deepseek-ai" / "dsh-desktop-host" / "lib" / "cli.js" if mac_bundle
+                       else install_home / "resources" / "runtime" / "node_modules"
+                       / "@deepseek-ai" / "dsh" / "lib" / "bin.js")
         node = Path(
             os.environ.get(
                 "DEEPSEEK_HARNESS_NODE",
-                str(install_home / "resources" / "runtime" / "node.exe"),
+                str(default_node),
             )
         ).expanduser().resolve()
         cli = Path(
             os.environ.get(
                 "DEEPSEEK_HARNESS_CLI",
-                str(
-                    install_home
-                    / "resources"
-                    / "runtime"
-                    / "node_modules"
-                    / "@deepseek-ai"
-                    / "dsh"
-                    / "lib"
-                    / "bin.js"
-                ),
+                str(default_cli),
             )
         ).expanduser().resolve()
         return cls(install_home=install_home, data_home=data_home, node=node, cli=cli)
+
+    @property
+    def is_mac_bundle(self) -> bool:
+        return self.install_home.suffix.lower() == ".app"
+
+    def node_command(self, *args: str) -> list[str]:
+        return [str(self.node), *(["--expose-internals"] if self.is_mac_bundle else []), *args]
+
+    def runtime_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["DSH_HOME"] = str(self.data_home)
+        if self.is_mac_bundle:
+            env["ELECTRON_RUN_AS_NODE"] = "1"
+            env["DSH_DESKTOP_NODE_EXECUTABLE"] = str(self.node)
+            support = self.install_home / "Contents" / "Resources" / "runtime" / "bin"
+            env["PATH"] = str(support) + os.pathsep + env.get("PATH", "")
+        return env
 
     def validate(self) -> None:
         required = (
@@ -79,7 +97,9 @@ class HarnessLayout:
             self.cli,
             self.data_home / "profiles" / "headless" / "package.json",
         )
-        missing = [str(path) for path in required if not path.exists()]
+        missing = [str(path) for path in required if not path.exists() and not
+                   (path == self.cli and self.is_mac_bundle and
+                    (self.install_home / "Contents" / "Resources" / "app.asar").is_file())]
         if missing:
             raise RuntimeError("DeepSeek Harness is incomplete or not configured: " + ", ".join(missing))
         if self.install_home == self.data_home:
@@ -186,16 +206,16 @@ def model_override(
         plugin_root = Path(__file__).resolve().parents[2]
         helper = plugin_root / "scripts" / "model-settings.mjs"
         completed = subprocess.run(
-            [
-                str(layout.node),
+            layout.node_command(
                 str(helper),
                 str(source),
                 str(settings_path),
                 selected,
                 selected_effort,
                 str(layout.install_home),
-            ],
+            ),
             cwd=plugin_root,
+            env=layout.runtime_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -301,7 +321,7 @@ async def run_harness(
 
     async with lock:
         before = await _git_summary(target)
-        env = os.environ.copy()
+        env = layout.runtime_env()
         env.update(
             {
                 "DSH_HOME": str(layout.data_home),
@@ -317,15 +337,14 @@ async def run_harness(
             patch_path,
         ):
             code, stdout, stderr = await _run_capture(
-                [
-                    str(layout.node),
+                layout.node_command(
                     str(layout.cli),
                     "--profile",
                     "headless",
                     "--patch",
                     str(patch_path),
                     prompt,
-                ],
+                ),
                 target,
                 env,
                 timeout_seconds,

@@ -21,6 +21,9 @@ def main() -> int:
         return 2
     env = os.environ.copy()
     env["PYTHONPATH"] = str(plugin_root / "src")
+    if os.name != "nt":
+        os.chdir(plugin_root)
+        os.execve(str(venv_python), [str(venv_python), "-m", "deepseek_coding_agent.server"], env)
     return subprocess.call(
         [str(venv_python), "-m", "deepseek_coding_agent.server"],
         cwd=plugin_root,
