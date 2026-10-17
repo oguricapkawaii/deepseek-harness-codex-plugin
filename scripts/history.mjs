@@ -76,11 +76,12 @@ async function findLogs() {
     const projectPath = join(sessionRoot, project.name);
     for (const session of await readdir(projectPath, { withFileTypes: true })) {
       if (!session.isDirectory()) continue;
-      for (const filename of ["session.jsonl.zstd", "session.jsonl"]) {
+      // Prefer the current generation, without showing migrated backups twice.
+      for (const filename of ["session.v4.jsonl.zstd", "session.v4.jsonl", "session.v3.jsonl.zstd", "session.v3.jsonl", "session.jsonl.zstd", "session.jsonl"]) {
         const path = join(projectPath, session.name, filename);
         try {
           const info = await stat(path);
-          if (info.isFile()) logs.push({ path, info });
+          if (info.isFile()) { logs.push({ path, info }); break; }
         } catch (error) {
           if (error?.code !== "ENOENT") throw error;
         }
@@ -105,6 +106,7 @@ function metadata(session, info) {
   const title = session.events.findLast((event) => event?.type === "session/title")?.data?.title ?? "Untitled Harness task";
   const lastBoundary = session.events.findLast((event) => event?.type === "turn/start" || event?.type === "turn/end");
   const end = session.events.findLast((event) => event?.type === "turn/end");
+  const selection = session.events.findLast((event) => event?.type === "request/header")?.data?.header?.config;
   return {
     id: session.header.id,
     title,
@@ -114,6 +116,11 @@ function metadata(session, info) {
     status: lastBoundary?.type === "turn/start" ? "interrupted" : "complete",
     end_reason: end?.data?.reason ?? null,
     messages: session.events.filter((event) => event?.type === "user/message" || event?.type === "assistant/message").length,
+    runtime_selection: selection ? {
+      provider: selection.provider ?? null, model: selection.model ?? null,
+      reasoning_effort: selection.reasoningEffort ?? null,
+      max_tokens: selection.maxTokens ?? null,
+    } : null,
   };
 }
 
@@ -168,15 +175,20 @@ if (mode === "list") {
     if (items.length >= limit) break;
   }
   process.stdout.write(JSON.stringify({ data_home: dataHome, sessions: items }));
-} else if (mode === "export") {
+} else if (mode === "export" || mode === "inspect") {
   let found;
+  let foundInfo;
   for (const log of logs) {
     const session = await readSession(log.path);
-    if (session.header.id === value) { found = session; break; }
+    if (session.header.id === value) { found = session; foundInfo = log.info; break; }
   }
   if (!found) throw new Error(`session not found: ${value}`);
-  const maxChars = Number.parseInt(optional, 10);
-  process.stdout.write(JSON.stringify({ session_id: value, markdown: exportMarkdown(found, maxChars) }));
+  if (mode === "inspect") {
+    process.stdout.write(JSON.stringify(metadata(found, foundInfo)));
+  } else {
+    const maxChars = Number.parseInt(optional, 10);
+    process.stdout.write(JSON.stringify({ session_id: value, markdown: exportMarkdown(found, maxChars) }));
+  }
 } else {
   throw new Error(`unknown history mode: ${mode}`);
 }

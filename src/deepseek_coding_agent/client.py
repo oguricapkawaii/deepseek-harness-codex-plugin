@@ -59,11 +59,17 @@ class DeepSeekClient:
         model: str = "",
         thinking: bool = True,
         max_tokens: int | None = None,
+        reasoning_effort: str = "",
     ) -> dict[str, Any]:
         selected_model = model.strip() or self.settings.model
-        selected_max_tokens = max_tokens or self.settings.max_tokens
+        selected_max_tokens = self.settings.max_tokens if max_tokens is None else max_tokens
         if not 1 <= selected_max_tokens <= 131_072:
             raise ValueError("max_tokens must be between 1 and 131072")
+        effort = reasoning_effort.strip() or ("max" if thinking else "off")
+        if effort not in {"off", "low", "high", "max"}:
+            raise ValueError("reasoning_effort must be off, low, high, or max")
+        if not thinking and effort != "off":
+            raise ValueError("thinking=False requires reasoning_effort=off")
 
         try:
             response = await self._client.chat.completions.create(
@@ -71,8 +77,8 @@ class DeepSeekClient:
                 messages=messages,
                 max_tokens=selected_max_tokens,
                 stream=False,
-                reasoning_effort="high" if thinking else "none",
-                extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}},
+                reasoning_effort="none" if effort == "off" else effort,
+                extra_body={"thinking": {"type": "disabled" if effort == "off" else "enabled"}},
             )
         except Exception as exc:
             raise RuntimeError(f"DeepSeek request failed: {type(exc).__name__}: {exc}") from exc
@@ -81,11 +87,14 @@ class DeepSeekClient:
         usage = getattr(response, "usage", None)
         return {
             "model": getattr(response, "model", selected_model),
+            "requested_reasoning_effort": effort,
             "content": choice.message.content or "",
             "finish_reason": getattr(choice, "finish_reason", None),
             "usage": {
                 "prompt_tokens": getattr(usage, "prompt_tokens", None),
                 "completion_tokens": getattr(usage, "completion_tokens", None),
                 "total_tokens": getattr(usage, "total_tokens", None),
+                "cache_hit_tokens": getattr(usage, "prompt_cache_hit_tokens", None),
+                "cache_miss_tokens": getattr(usage, "prompt_cache_miss_tokens", None),
             },
         }

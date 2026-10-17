@@ -35,6 +35,19 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["content"], "proposal")
         self.assertEqual(result["usage"]["total_tokens"], 30)
         self.assertEqual(completions.kwargs["extra_body"]["thinking"]["type"], "enabled")
+        self.assertEqual(completions.kwargs["reasoning_effort"], "max")
+
+    async def test_effort_off_and_explicit_low_map_to_api_parameters(self) -> None:
+        completions = FakeCompletions()
+        fake = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        client = DeepSeekClient(Settings(api_key="test"), fake)
+        await client.complete([], reasoning_effort="low")
+        self.assertEqual(completions.kwargs["reasoning_effort"], "low")
+        await client.complete([], thinking=False)
+        self.assertEqual(completions.kwargs["reasoning_effort"], "none")
+        self.assertEqual(completions.kwargs["extra_body"]["thinking"]["type"], "disabled")
+        with self.assertRaises(ValueError):
+            await client.complete([], thinking=False, reasoning_effort="max")
 
     def test_missing_key_is_actionable(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

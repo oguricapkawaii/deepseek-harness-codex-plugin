@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
 import time
@@ -18,16 +20,9 @@ DEFAULT_HARNESS_HOME = (Path("/Applications/DeepSeek Harness.app") if sys.platfo
                         else Path(r"E:\DeepSeekHarness-win32-x64-0.1.1-rc.1"))
 DEFAULT_HARNESS_DATA_HOME = (Path.home() / "Documents" / "DeepSeekHarness-GPT" if sys.platform == "darwin"
                              else Path(r"E:\DeepSeekHarness-GPT"))
-HARNESS_MODELS = (
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash-vision-exp",
-)
-HarnessModel = Literal[
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash-vision-exp",
-]
+DEFAULT_MODEL = "deepseek-flash"
+# Model ids evolve independently of this bridge. The installed adapter validates them.
+HarnessModel = str
 HARNESS_REASONING_EFFORTS = ("off", "low", "high", "max")
 HarnessReasoningEffort = Literal["off", "low", "high", "max"]
 MAX_TASK_CHARS = 40_000
@@ -172,9 +167,9 @@ def build_task(task: str) -> str:
 
 
 def _normalize_model(model: str) -> str:
-    selected = model.strip() or HARNESS_MODELS[0]
-    if selected not in HARNESS_MODELS:
-        raise ValueError("model must be one of: " + ", ".join(HARNESS_MODELS))
+    selected = model.strip() or DEFAULT_MODEL
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", selected):
+        raise ValueError("model must be a valid model id (up to 200 characters)")
     return selected
 
 
@@ -193,43 +188,90 @@ def model_override(
     model: str,
     reasoning_effort: str = "max",
 ) -> Iterator[tuple[str, str, Path]]:
-    """Create a task-local settings document and Cordis patch, then clean both up."""
+    """Override the current profile directly; never rewrite legacy settings or keys."""
     selected = _normalize_model(model)
     selected_effort = _normalize_reasoning_effort(reasoning_effort)
-    source = layout.data_home / "settings.yaml"
     runtime_dir = layout.data_home / ".mcp-runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     nonce = uuid.uuid4().hex
-    settings_path = runtime_dir / f"settings-{nonce}.json"
     patch_path = runtime_dir / f"patch-{nonce}.yaml"
     try:
-        plugin_root = Path(__file__).resolve().parents[2]
-        helper = plugin_root / "scripts" / "model-settings.mjs"
-        completed = subprocess.run(
-            layout.node_command(
-                str(helper),
-                str(source),
-                str(settings_path),
-                selected,
-                selected_effort,
-                str(layout.install_home),
-            ),
-            cwd=plugin_root,
-            env=layout.runtime_env(),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError("could not prepare task-local Harness settings: " + completed.stderr.strip())
-        patch = [{"id": "settings", "config": {"path": str(settings_path), "watch": False}}]
-        patch_path.write_text(json.dumps(patch, ensure_ascii=False, indent=2), encoding="utf-8")
+        patch = [
+            {"id": "agent-default-model", "config": {
+                "provider": "deepseek-official", "model": selected,
+                "reasoningEffort": selected_effort,
+            }},
+            # 0.2.1 headless disables the credential service by default. Restore it
+            # explicitly in the isolated home, without exporting or copying a key.
+            {"id": "credentials", "disabled": False},
+            # Avoid an extra billed request just to title a one-shot job.
+            {"id": "session-title-llm", "disabled": True},
+        ]
+        with patch_path.open("x", encoding="utf-8") as handle:
+            os.chmod(patch_path, 0o600)
+            json.dump(patch, handle, ensure_ascii=False, indent=2)
         yield selected, selected_effort, patch_path
     finally:
         patch_path.unlink(missing_ok=True)
-        settings_path.unlink(missing_ok=True)
+
+
+async def list_models() -> dict[str, Any]:
+    layout = HarnessLayout.from_env()
+    layout.validate()
+    helper = Path(__file__).resolve().parents[2] / "scripts" / "runtime-info.mjs"
+    code, out, err = await _run_capture(
+        layout.node_command(str(helper), str(layout.install_home), str(layout.data_home)),
+        helper.parent, layout.runtime_env(), 30,
+    )
+    if code:
+        raise RuntimeError("Cannot read installed Harness catalog: " + _clip(err, 2000))
+    return json.loads(out)
+
+
+def parse_run_events(output: str) -> dict[str, Any]:
+    """Reduce public headless --json events; don't return tool traffic or thoughts."""
+    session_id = None
+    final = None
+    finish_reason = None
+    steps = 0
+    samples: list[dict[str, Any]] = []
+    errors = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Harness returned a non-JSON run event; check runtime compatibility") from exc
+        if not isinstance(event, dict):
+            raise RuntimeError("Harness returned an invalid run event")
+        kind = event.get("type")
+        if kind == "session":
+            session_id = event.get("sessionId")
+        elif kind == "final":
+            final = event.get("text", "")
+        elif kind == "error":
+            errors.append(event.get("message", "Harness error"))
+        elif kind == "status":
+            if event.get("phase") == "turn_end":
+                finish_reason = event.get("reason", {}).get("kind")
+            elif event.get("phase") == "step_end":
+                steps += 1
+                if isinstance(event.get("usage"), dict):
+                    samples.append(event["usage"])
+    usage: dict[str, int | float] = {}
+    # A missing sample is unknown, not zero. Optional buckets are only totaled
+    # when every contributing step supplies them.
+    if samples:
+        for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"):
+            values = [sample.get(key) for sample in samples]
+            if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+                usage[key] = sum(values)
+    return {
+        "session_id": session_id, "assistant_result": _clip(final or ""),
+        "finish_reason": finish_reason, "has_final": final is not None,
+        "usage": usage or None, "usage_complete": steps > 0 and len(samples) == steps,
+        "usage_scope": "root agent steps; excludes auxiliary and subagent requests",
+        "errors": errors,
+    }
 
 
 def _clip(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -250,20 +292,37 @@ async def _run_capture(args: list[str], cwd: Path, env: dict[str, str], timeout:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         creationflags=creationflags,
+        start_new_session=os.name != "nt",
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError:
-        process.terminate()
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        # Terminate the owned process group, including spawned shell workers.
+        if os.name == "nt":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/PID", str(process.pid), "/T", "/F",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        except TimeoutError:
-            process.kill()
+        except asyncio.TimeoutError:
+            try:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             stdout, stderr = await process.communicate()
-        raise RuntimeError(
-            f"DeepSeek Harness exceeded the {timeout}-second limit. Partial output: "
-            + _clip((stdout + stderr).decode("utf-8", errors="replace"), 4_000)
-        )
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise RuntimeError(f"DeepSeek Harness exceeded the {timeout}-second limit; owned workers stopped") from exc
     return (
         int(process.returncode or 0),
         stdout.decode("utf-8", errors="replace").strip(),
@@ -300,8 +359,9 @@ async def run_harness(
     workspace: str,
     task: str,
     timeout_seconds: int = 1_800,
-    model: HarnessModel = "deepseek-v4-flash",
+    model: HarnessModel = DEFAULT_MODEL,
     reasoning_effort: HarnessReasoningEffort = "max",
+    session_id: str = "",
 ) -> dict[str, Any]:
     if not MIN_TIMEOUT_SECONDS <= timeout_seconds <= MAX_TIMEOUT_SECONDS:
         raise ValueError(
@@ -317,9 +377,19 @@ async def run_harness(
         plugin_root=plugin_root,
     )
     prompt = build_task(task)
+    session_id = session_id.strip()
+    if session_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", session_id):
+        raise ValueError("session_id must be a valid saved session id")
     lock = _workspace_locks.setdefault(os.path.normcase(str(target)), asyncio.Lock())
 
     async with lock:
+        from .history import inspect_history
+
+        if session_id:
+            previous = await inspect_history(session_id)
+            saved_workspace = previous.get("workspace")
+            if not saved_workspace or Path(saved_workspace).resolve() != target:
+                raise ValueError("saved session belongs to a different workspace")
         before = await _git_summary(target)
         env = layout.runtime_env()
         env.update(
@@ -343,6 +413,9 @@ async def run_harness(
                     "headless",
                     "--patch",
                     str(patch_path),
+                    "--json",
+                    *(["--session-id", session_id] if session_id else []),
+                    "--",
                     prompt,
                 ),
                 target,
@@ -351,20 +424,36 @@ async def run_harness(
             )
         duration = round(time.monotonic() - started, 2)
         after = await _git_summary(target)
+        parsed = parse_run_events(stdout)
+        saved = None
+        history_error = None
+        if parsed["session_id"]:
+            try:
+                saved = await inspect_history(parsed["session_id"])
+            except RuntimeError as exc:
+                history_error = str(exc)
         result: dict[str, Any] = {
-            "ok": code == 0,
+            "ok": code == 0 and parsed["has_final"] and parsed["finish_reason"] == "completed" and not parsed["errors"],
             "exit_code": code,
             "duration_seconds": duration,
             "workspace": str(target),
             "model": selected_model,
             "reasoning_effort": selected_effort,
+            "selection_source": "requested; see runtime_selection for dispatched configuration",
+            "runtime_selection": saved.get("runtime_selection") if saved else None,
+            "model_verification": "persisted Harness request/header; backend deployment version is not independently verified",
+            "resumed": bool(session_id),
             "data_home": str(layout.data_home),
-            "assistant_result": _clip(stdout),
+            **parsed,
             "git_before": before,
             "git_after": after,
         }
         if stderr:
             result["diagnostics"] = _clip(stderr, 8_000)
-        if code != 0:
-            raise RuntimeError(f"DeepSeek Harness exited with code {code}: {result}")
+        if history_error:
+            result["history_error"] = _clip(history_error, 2000)
+        # Return a structured failure with the session id so a caller can inspect
+        # or resume it. Don't bury the durable identity in an exception string.
+        if not result["ok"]:
+            result["error"] = "Harness task did not complete; inspect diagnostics and session history"
         return result

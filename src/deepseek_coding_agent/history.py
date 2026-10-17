@@ -62,3 +62,7 @@ async def export_history(session_id: str, max_chars: int = 30_000) -> dict[str, 
     if not 1_000 <= max_chars <= 80_000:
         raise ValueError("max_chars must be between 1000 and 80000")
     return await _run_helper("export", session_id, str(max_chars))
+
+
+async def inspect_history(session_id: str) -> dict[str, Any]:
+    return await _run_helper("inspect", session_id, "")

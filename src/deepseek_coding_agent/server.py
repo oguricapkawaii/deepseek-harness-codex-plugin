@@ -8,7 +8,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from .client import DeepSeekClient
-from .harness import HarnessModel, HarnessReasoningEffort, run_harness
+from .harness import DEFAULT_MODEL, HarnessModel, HarnessReasoningEffort, list_models, run_harness
 from .history import export_history, list_history
 from .prompts import code_messages, fix_messages, require_text, review_messages
 
@@ -30,11 +30,18 @@ async def harness_run(
     workspace: str,
     task: str,
     timeout_seconds: int = 1800,
-    model: HarnessModel = "deepseek-v4-flash",
+    model: HarnessModel = DEFAULT_MODEL,
     reasoning_effort: HarnessReasoningEffort = "max",
+    session_id: str = "",
 ) -> dict[str, Any]:
-    """Run one isolated Harness task with selected DeepSeek model and reasoning effort."""
-    return await run_harness(workspace, task, timeout_seconds, model, reasoning_effort)
+    """Run an isolated task; set session_id to resume it in the same workspace. Use harness_models for model ids. Returns session id, request selection and root-step usage."""
+    return await run_harness(workspace, task, timeout_seconds, model, reasoning_effort, session_id)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def harness_models() -> dict[str, Any]:
+    """Read the installed Harness version and advisory model catalog without a model request or credentials."""
+    return await list_models()
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -49,8 +56,8 @@ async def harness_history_export(session_id: str, max_chars: int = 30_000) -> di
     return await export_history(session_id, max_chars)
 
 
-async def _complete(messages: list[dict[str, str]], model: str, thinking: bool, max_tokens: int | None) -> dict[str, Any]:
-    return await DeepSeekClient().complete(messages, model=model, thinking=thinking, max_tokens=max_tokens)
+async def _complete(messages: list[dict[str, str]], model: str, thinking: bool, max_tokens: int | None, reasoning_effort: str) -> dict[str, Any]:
+    return await DeepSeekClient().complete(messages, model=model, thinking=thinking, max_tokens=max_tokens, reasoning_effort=reasoning_effort)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -60,6 +67,7 @@ async def deepseek_ask(
     model: str = "",
     thinking: bool = True,
     max_tokens: int | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Ask a bounded software-engineering question; sends only the supplied text to DeepSeek."""
     prompt = require_text("prompt", prompt)
@@ -69,6 +77,7 @@ async def deepseek_ask(
         model,
         thinking,
         max_tokens,
+        reasoning_effort,
     )
 
 
@@ -80,9 +89,10 @@ async def deepseek_code(
     model: str = "",
     thinking: bool = True,
     max_tokens: int | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Generate a code or patch proposal without reading or modifying local files."""
-    return await _complete(code_messages(task, context, constraints), model, thinking, max_tokens)
+    return await _complete(code_messages(task, context, constraints), model, thinking, max_tokens, reasoning_effort)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -92,9 +102,10 @@ async def deepseek_review(
     model: str = "",
     thinking: bool = True,
     max_tokens: int | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Review explicitly supplied code or a diff; never opens project files itself."""
-    return await _complete(review_messages(code_or_diff, focus), model, thinking, max_tokens)
+    return await _complete(review_messages(code_or_diff, focus), model, thinking, max_tokens, reasoning_effort)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -105,9 +116,10 @@ async def deepseek_fix(
     model: str = "",
     thinking: bool = True,
     max_tokens: int | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     """Propose one focused revision from an explicit task, review, and code/diff."""
-    return await _complete(fix_messages(task, review, code_or_diff), model, thinking, max_tokens)
+    return await _complete(fix_messages(task, review, code_or_diff), model, thinking, max_tokens, reasoning_effort)
 
 
 def main() -> None:

@@ -8,22 +8,31 @@ The workflow is:
 
 `requirements -> Harness reads/edits/tests -> Codex reviews -> optional repair`
 
-The current `main` branch supports macOS and Windows. The original Windows-only
-implementation is preserved in the `v0.4.0-windows` tag.
+Version **0.6.0** targets Harness **0.2.1-rc.2**. macOS is integration-tested;
+Windows retains its launcher code but has not been regression-tested for this
+release. The original Windows-only implementation remains in `v0.4.0-windows`,
+and the previous bridge is preserved in `v0.5.0`.
 
 ## Features
 
 - Runs Harness inside one explicitly selected workspace with `workspace-write`.
 - Keeps GPT/Codex sessions in a data directory separate from the desktop app.
-- Selects a model per task: `deepseek-v4-flash`, `deepseek-v4-pro`, or
-  `deepseek-v4-flash-vision-exp`.
+- Reads the installed model catalog with `harness_models`. Defaults to
+  `deepseek-flash` (DeepSeek-V4.1-Flash on 0.2.1-rc.2); Pro uses
+  `deepseek-v4-pro`. Explicit future/custom ids go to the runtime for validation,
+  without a bridge update. Discovery is advisory and does not prove account
+  access. Old Flash/vision-exp prompts should use the new catalog's id; the
+  bridge never silently substitutes models.
 - Selects reasoning effort per task: `off`, `low`, `high`, or `max` (default).
 - Lists and exports the isolated Harness history without opening that data
   directory in the desktop app.
+- Continues a conversation using its `session_id` and the same workspace.
+- Parses public headless `--json` events for completion and root-step token/cache
+  counts. Reads the saved request header to verify runtime model selection.
 - Includes direct text-only ask, code, review, and fix tools for users who also
   provide `DEEPSEEK_API_KEY`.
 
-MCP tools: `harness_run`, `harness_history_list`, `harness_history_export`,
+MCP tools: `harness_models`, `harness_run`, `harness_history_list`, `harness_history_export`,
 `deepseek_ask`, `deepseek_code`, `deepseek_review`, and `deepseek_fix`.
 
 ## Requirements
@@ -52,8 +61,8 @@ python3 scripts/setup.py
 On Windows, `python scripts/setup.py` is usually the equivalent command.
 
 Register the folder as a local Codex plugin, or add the MCP server manually.
-The bundled `.mcp.json` uses `python3` for macOS. On Windows, use the
-`v0.4.0-windows` tag or change that command to `python`. For a user-level Codex
+The bundled `.mcp.json` uses `python3` for macOS. On Windows, change that command
+to `python` (the historical Windows tag targets the older Harness). For a user-level Codex
 MCP entry, copy `codex-mcp.toml.example`, replace every `<PLUGIN_ROOT>` with this
 repository's absolute path, and use the platform-appropriate virtual-environment
 Python path.
@@ -82,7 +91,17 @@ Example request:
 | `DEEPSEEK_MAX_TOKENS` | Direct text API output-token limit |
 
 The Harness automation tools use Harness's own credential store. They do not
-copy a key into this repository.
+copy a key into this repository. Harness 0.2.1 disables stored credentials in
+headless by default; this bridge explicitly re-enables the credentials service
+in the isolated home. Its stored API key takes precedence over environment
+fallbacks. Desktop account OAuth is not enabled by this bridge. The four direct
+text tools still require `DEEPSEEK_API_KEY`; their `reasoning_effort` supports
+`off / low / high / max`, with max as the thinking-mode default.
+
+Each run writes a private temporary profile patch, then removes it. It no
+longer passes a temporary `settings.yaml` path, which does not configure the
+new runtime's profile-based settings. Auxiliary model-generated session titles
+are disabled to avoid an additional request.
 
 ## History and isolation
 
@@ -93,6 +112,31 @@ the same session store can interrupt a run or damage transient state.
 Use `harness_history_list` to find Codex-side Harness sessions and
 `harness_history_export` to export one as Markdown. The history remains available
 even when the desktop app uses a different data directory.
+
+The reader recognizes legacy filenames and `session.v4.jsonl[.zstd]`, preferring
+the newest generation when migrated backups coexist. Reading does not perform
+an on-disk migration; resumption is owned by Harness and may require its
+supported history migration. A misspelled id or workspace mismatch fails.
+
+Example prompts (replace the workspace with an existing absolute path):
+
+```text
+先调用 harness_models 确认模型，再调用 harness_run。
+在 /absolute/project/path 完成……
+model 使用 deepseek-flash，reasoning_effort 使用 max。
+完成后检查 diff 和测试结果，并报告 session_id 与根 Agent Token 用量。
+```
+
+```text
+继续上次 Harness 任务，使用返回的 session_id 和原工作区。
+保留原模型及 max 强度，修复以下问题……，然后检查测试结果。
+```
+
+Token totals are provider-reported root-agent step usage, including retries
+when reported. `usage_complete=false` marks missing step samples. They exclude
+auxiliary/subagent calls and are **not a full bill**. No currency estimate is
+invented. The saved request header confirms the runtime-selected model and
+effort, not the provider's physical backend/version.
 
 ## Safety
 
@@ -112,11 +156,24 @@ diff before accepting model changes.
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-On Windows, use `.venv\Scripts\python.exe` instead. The doctor and unit tests do
-not call a model. macOS support, the seven-tool MCP handshake, history export,
-and one `deepseek-v4-flash`/`max` connectivity request were verified on the
-original development machine. Windows v0.5.0 compatibility is retained in code
-but has not been re-tested on that machine.
+On Windows, use `.venv\Scripts\python.exe` instead. The doctor checks runtime
+metadata, help and history, not live credential validity or model connectivity.
+
+An opt-in integration test launches the real installed Harness against a local
+fake Messages API. It verifies model/effort dispatch, token accounting, isolated
+saved credentials, session continuation, workspace rejection, and history
+export without contacting a paid model:
+
+```sh
+HARNESS_RUN_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+The desktop executable remains the runtime carrier. This release uses its
+documented headless flags (`--json`, `--session-id`); it does not install a
+second SDK runtime. Version/catalog discovery and history reading still depend
+on shipped module/layout compatibility. Test after future Harness upgrades.
+[Official release notes](https://github.com/deepseek-ai/deepseek-harness/releases)
+describe the 0.2.1 credential and model changes.
 
 ## License
 

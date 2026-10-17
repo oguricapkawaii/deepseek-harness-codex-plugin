@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepseek-harness-codex-plugin"
-version = "0.5.0"
+version = "0.6.0"
 description = "DeepSeek Harness automation and review tools for supervised coding workflows"
 readme = "README.md"
 license = "MIT"
